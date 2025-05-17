@@ -9,10 +9,11 @@ import CoreLocation
 
 @main
 class AppDelegate: NSObject, NSApplicationDelegate, XMLParserDelegate, CLLocationManagerDelegate {
-
+    // 상태 표시줄 항목
     var statusItem: NSStatusItem?
     var currentWeather: String = "🌤️ 로딩 중…"
-
+    
+    // 위치 관련
     var locationManager: CLLocationManager?
     var latitude: Double?
     var longitude: Double?
@@ -28,18 +29,28 @@ class AppDelegate: NSObject, NSApplicationDelegate, XMLParserDelegate, CLLocatio
     var reh = "-" // 습도
     var wsd = "-" // 풍속
 
+    // 앱 시작 시 실행
     func applicationDidFinishLaunching(_ aNotification: Notification) {
-        setupStatusBar()
-        requestLocation()
+        setupStatusBar()           // 상태 표시줄 초기 설정
+        requestLocation()          // 위치 요청
+        startHourlyWeatherUpdateTimer()  // 정각마다 날씨 갱신 타이머 시작
     }
 
     func applicationWillTerminate(_ aNotification: Notification) {}
 
+    // 상태바 UI 구성 및 초기 메뉴 항목 생성
     func setupStatusBar() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem?.button?.title = currentWeather
 
         let menu = NSMenu()
+        
+        let imageItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+        let weatherImage = NSImage(named: "sunimg") ?? NSImage()
+        weatherImage.size = NSSize(width: 40, height: 40)
+        imageItem.image = weatherImage
+        menu.addItem(imageItem)
+
         menu.addItem(NSMenuItem(title: "PCP (강수량): -", action: nil, keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "PTY (강수형태): -", action: nil, keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "POP (강수확률): -", action: nil, keyEquivalent: ""))
@@ -49,16 +60,41 @@ class AppDelegate: NSObject, NSApplicationDelegate, XMLParserDelegate, CLLocatio
         menu.addItem(NSMenuItem(title: "WSD (풍속): -", action: nil, keyEquivalent: ""))
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: currentAddress, action: nil, keyEquivalent: ""))
+        
         statusItem?.menu = menu
     }
 
+
+    // 위치 권한 요청 및 매니저 초기화
     func requestLocation() {
         locationManager = CLLocationManager()
         locationManager?.delegate = self
         locationManager?.desiredAccuracy = kCLLocationAccuracyHundredMeters
         locationManager?.requestWhenInUseAuthorization()
     }
+    
+    //정각 갱신 함수
+    func startHourlyWeatherUpdateTimer() {
+        let now = Date()
+        let calendar = Calendar.current
+        let nextHour = calendar.nextDate(after: now, matching: DateComponents(minute: 0, second: 0), matchingPolicy: .nextTime)!
+        let interval = nextHour.timeIntervalSince(now)
 
+        // 정각까지 기다렸다가 타이머 시작
+        DispatchQueue.main.asyncAfter(deadline: .now() + interval) {
+            self.updateWeatherAndLocation() // 첫 정각 호출
+            Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { _ in
+                self.updateWeatherAndLocation()
+            }
+        }
+    }
+
+    func updateWeatherAndLocation() {
+        print("🕒 정각 위치 및 날씨 갱신")
+        self.requestLocation()
+    }
+
+    // 위치 권한 상태 변경 시 처리
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         switch manager.authorizationStatus {
         case .authorizedWhenInUse, .authorizedAlways:
@@ -74,27 +110,31 @@ class AppDelegate: NSObject, NSApplicationDelegate, XMLParserDelegate, CLLocatio
         }
     }
 
+    // 위치 정보 받아오기 실패
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
         currentWeather = "📍위치 실패"
         statusItem?.button?.title = currentWeather
     }
 
+    // 위치 정보 갱신 성공
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard let location = locations.first else { return }
 
         latitude = location.coordinate.latitude
         longitude = location.coordinate.longitude
+        // 위도 격자를 nx,ny로 변경
         let converter = LamcProjection()
         let grid = converter.convertToGrid(lat: latitude!, lon: longitude!)
         let nx = String(grid.nx)
         let ny = String(grid.ny)
 
-        fetchWeather(nx: nx, ny: ny)
-        fetchAddress(location: location)
+        fetchWeather(nx: nx, ny: ny)    // 날씨 api 호출
+        fetchAddress(location: location)// 주소
 
         locationManager?.stopUpdatingLocation()
     }
-
+    
+    // 위치로부터 주소정보 받아오기
     func fetchAddress(location: CLLocation) {
         CLGeocoder().reverseGeocodeLocation(location) { placemarks, _ in
             if let placemark = placemarks?.first {
@@ -107,7 +147,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, XMLParserDelegate, CLLocatio
             }
         }
     }
-
+    
+    // 기상청 api 호출
     func fetchWeather(nx: String, ny: String) {
         let endpoint = "http://apis.data.go.kr/1360000/VilageFcstInfoService_2.0/getVilageFcst"
         let serviceKey = "hhbQu5nRBusr5BlOIDF%2FRCLif3Jouo%2FXSivdbIpFKNmqRGpqAfYgVOifn8AVleQ5GLJrE0huwPY%2BmdGgprrWMQ%3D%3D"
@@ -141,6 +182,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, XMLParserDelegate, CLLocatio
         }.resume()
     }
 
+    // 현재 시각으로 부터 가장 가까운 시간을 호출
     func getBaseTime() -> String {
         let now = Calendar.current.date(byAdding: .minute, value: -40, to: Date())!
         let hour = Calendar.current.component(.hour, from: now)
@@ -191,11 +233,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, XMLParserDelegate, CLLocatio
             }
             // 날씨 이미지 설정
             let weatherImageName = selectWeatherImage(sky: self.sky, pty: self.pty)
+            if let image = NSImage(named: weatherImageName) {
+                image.size = NSSize(width: 40, height: 40) 
+                self.statusItem?.menu?.items.first?.image = image
+            }
             self.statusItem?.menu?.items.first?.image = NSImage(named: weatherImageName)
         }
     }
 }
 
+// 강수량 값 데이터 변환
 func interpretPrecipitation(_ value: String) -> String {
     if value == "강수없음" || value == "-" {
         return "강수 없음"
@@ -210,6 +257,7 @@ func interpretPrecipitation(_ value: String) -> String {
     return value
 }
 
+// 날씨 데이터 값 변환
 func interpretPrecipitationType(_ value: String) -> String {
     switch value {
     case "0": return "없음"
@@ -221,6 +269,7 @@ func interpretPrecipitationType(_ value: String) -> String {
     }
 }
 
+// 하늘 상태 데이터 값 변환
 func interpretSkyType(_ value: String) -> String {
     switch value {
     case "1": return "맑음"
@@ -229,6 +278,8 @@ func interpretSkyType(_ value: String) -> String {
     default: return value
     }
 }
+
+// 이미지 호출
 func selectWeatherImage(sky: String, pty: String) -> String {
     if pty != "없음" {
         return "rainimg" // 강수 중이면 무조건 비 이미지
